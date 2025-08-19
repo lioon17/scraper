@@ -1,0 +1,155 @@
+Here's a concise breakdown of the key sections in the scraper code and their functions:
+
+1. Class Constructor (constructor)
+javascript
+constructor(config = {}) {
+  this.config = { /* default settings */ ...config };
+  this.scrapedData = [];
+  this.requestCount = 0;
+}
+Function: Initializes scraper with default/custom settings
+
+Purpose: Centralized configuration for URL, rate limits, output file, etc
+
+Key Parameters:
+
+rateLimit: Delay between requests (anti-blocking)
+
+headless: Browser visibility mode
+
+outputFile: Data storage location
+
+2. Robots.txt Checker (checkRobotsTxt)
+javascript
+async checkRobotsTxt() {
+  // Fetches and logs robots.txt
+}
+Function: Checks scraping permissions
+
+Purpose: Ethical compliance and risk assessment
+
+Output: Warns if scraping might violate site policies
+
+3. Static Content Scraper (scrapeStatic)
+javascript
+async scrapeStatic(url, selector) {
+  // Uses Axios + Cheerio
+}
+Function: Scrapes standard HTML pages
+
+Key Features:
+
+Realistic browser headers (User-Agent)
+
+CSS selector targeting
+
+Lightweight processing
+
+4. Dynamic Content Scraper (scrapeDynamic)
+javascript
+async scrapeDynamic(url, selector) {
+  // Uses Puppeteer
+}
+Function: Handles JavaScript-rendered content
+
+Key Features:
+
+Full browser emulation
+
+Waits for elements to load
+
+Executes in-page JavaScript
+
+Automatic resource cleanup
+
+5. Pagination Handler (scrapePagination)
+javascript
+async scrapePagination() {
+  while(hasNextPage) { ... }
+}
+Function: Crawls through multiple pages
+
+Safety Features:
+
+Page limit (prevents infinite loops)
+
+Rate limiting between pages
+
+Empty page detection
+
+6. Retry Mechanism (scrapeWithRetry)
+javascript
+async scrapeWithRetry() {
+  for(let attempt=1; attempt<=maxRetries; attempt++)
+}
+Function: Error resilience system
+
+Purpose: Handles temporary network failures
+
+Strategy: Exponential backoff delay between retries
+
+7. Data Saver (saveData)
+javascript
+saveData() {
+  fs.writeFileSync(...)
+}
+Function: Stores collected results
+
+Output: Structured JSON file
+
+Extension Point: Easy to modify for CSV/DB formats
+
+8. Main Orchestrator (run)
+javascript
+async run() {
+  await this.checkRobotsTxt();
+  // Initial scrape
+  await this.scrapePagination();
+  this.saveData();
+}
+Function: Coordinates scraping workflow
+
+Execution Flow:
+
+Permission check
+
+Initial page scrape
+
+Pagination handling
+
+Data persistence
+
+Performance reporting
+
+9. Execution Wrapper (IIFE)
+javascript
+(async () => {
+  const scraper = new WebScraper();
+  await scraper.run();
+})();
+Function: Safe instantiation and execution
+
+Features:
+
+Async context for modern JS
+
+Isolated scope
+
+Error containment
+
+Key System Interactions:
+Ethical Compliance: Robots.txt check → Legal protection
+
+Anti-Blocking: User-Agent + Rate limiting → Avoid detection
+
+Content Handling:
+
+Static: Axios/Cheerio → Efficiency
+
+Dynamic: Puppeteer → Accuracy
+
+Fault Tolerance: Retry mechanism → Reliability
+
+Data Integrity: Structured collection → Usable output
+
+This architecture provides a balanced approach between scraping effectiveness, ethical compliance, and code maintainability while offering clear extension points for more complex scenarios.
