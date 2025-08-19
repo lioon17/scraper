@@ -47,33 +47,50 @@ class WebScraper {
   }
 
 
-  async scrapeStatic(url, selector) {
-    try {
-      this.currentUserAgent = new userAgents({ deviceCategory: 'desktop' }).toString();
-      const response = await axios.get(url, {
-        headers: {
-          'User-Agent': this.currentUserAgent,
-          'Accept': 'text/html',
-        },
-        timeout: 15000,
-        httpsAgent: this.config.useProxies && this.config.proxyUrl 
-          ? new HttpsProxyAgent(this.config.proxyUrl) 
-          : undefined
+async scrapeStatic(url, selector) {
+  try {
+    this.currentUserAgent = new userAgents({ deviceCategory: 'desktop' }).toString();
+    const response = await axios.get(url, {
+      headers: {
+        'User-Agent': this.currentUserAgent,
+        'Accept': 'text/html',
+      },
+      timeout: 15000,
+      httpsAgent: this.config.useProxies && this.config.proxyUrl 
+        ? new HttpsProxyAgent(this.config.proxyUrl) 
+        : undefined
+    });
+
+    const $ = cheerio.load(response.data);
+    const results = [];
+
+    $(selector).each((i, el) => {
+      const title = $(el).attr('title') || $(el).text().trim();
+      const href = $(el).attr('href');
+      
+      // Attempt to find associated image (assumes image is in parent or sibling)
+      const parent = $(el).closest('.product_pod');
+      const imgSrc = parent.find('img').attr('src');
+
+      // Resolve full image URL
+      const imageUrl = imgSrc
+        ? new URL(imgSrc, url).href
+        : null;
+
+      results.push({
+        title,
+        url: href,
+        image: imageUrl
       });
-      const $ = cheerio.load(response.data);
-      const results = [];
-      $(selector).each((i, el) => {
-        results.push({
-          title: $(el).attr('title') || $(el).text().trim(),
-          url: $(el).attr('href')
-        });
-      });
-      return results;
-    } catch (error) {
-      console.error(`Static scrape error: ${error.message}`);
-      throw error;
-    }
+    });
+
+    return results;
+  } catch (error) {
+    console.error(`Static scrape error: ${error.message}`);
+    throw error;
   }
+}
+
 
   async scrapeWithRetry(url, selector) {
     for (let attempt = 1; attempt <= this.config.maxRetries; attempt++) {
