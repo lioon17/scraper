@@ -115,65 +115,65 @@ app.get('/search/amazon-product', async (req, res) => {
 
 // ---------- Amazon product (clean) (SearchAPI.io) ----------
 // Example: /search/amazon-product/clean?asin=B0D1XD1ZV3&amazon_domain=amazon.com&delivery_country=us
-app.get('/search/amazon-product/clean', async (req, res) => {
+// Clean Amazon keyword search
+app.get('/search/amazon/clean', async (req, res) => {
   try {
-    if (!requireKey(res)) return;
-    const { asin, amazon_domain = 'amazon.com', delivery_country = 'us' } = req.query;
-    if (!asin) return res.status(400).json({ error: 'Missing asin' });
+    if (!process.env.SEARCHAPI_KEY) return res.status(500).json({ error: 'SEARCHAPI_KEY missing' });
+
+    const { q, amazon_domain = 'amazon.com', delivery_country = 'us', page = '1' } = req.query;
+    if (!q) return res.status(400).json({ error: 'Missing q' });
 
     const params = new URLSearchParams({
-      engine: 'amazon_product',
-      asin,
+      engine: 'amazon_search',
+      q,
       amazon_domain,
       delivery_country,
+      page
     });
 
-    const r = await axios.get(`${SEARCHAPI_ENDPOINT}?${params.toString()}`, {
-      headers: { Authorization: `Bearer ${process.env.SEARCHAPI_KEY}` },
-      timeout: 30000,
+    const r = await axios.get(`https://www.searchapi.io/api/v1/search?${params}`,
+      { headers: { Authorization: `Bearer ${process.env.SEARCHAPI_KEY}` }, timeout: 30000 });
+
+    const items = r.data.organic_results || [];
+    const data = items.map(i => ({
+      asin: i.asin,
+      title: i.title,
+      link: i.link,
+      price: i.price?.value ?? null,
+      currency: i.price?.currency ?? null,
+      rating: i.rating ?? null,
+      reviews: i.reviews ?? 0,
+      image: i.thumbnail ?? null,
+      badges: i.badges || [],
+      delivery: i.delivery ?? null
+    }));
+
+    res.json({
+      success: true,
+      query: q,
+      domain: amazon_domain,
+      page: Number(page),
+      count: data.length,
+      data
     });
-
-    const p = r.data.product;
-    if (!p) return res.status(404).json({ error: 'No product found' });
-
-    const clean = {
-      asin: p.asin,
-      title: p.title,
-      link: p.link,
-      rating: p.rating ?? null,
-      reviews: p.reviews ?? 0,
-      price: p.buybox?.price?.value ?? null,
-      currency: p.buybox?.price?.currency ?? null,
-      original_price: p.buybox?.original_price?.value ?? null,
-      in_stock: p.buybox?.availability?.toLowerCase().includes('in stock') ?? false,
-      main_image: p.main_image || (p.images?.[0]?.link ?? null),
-      images: (p.images || []).map(i => i.link),
-      variants: (p.variants || []).map(v => ({
-        asin: v.asin,
-        title: v.title,
-        main_image: v.main_image,
-      })),
-    };
-
-    return res.json({ success: true, data: clean });
   } catch (err) {
-    console.error('amazon product clean error:', err?.response?.status, err?.message);
     const status = err?.response?.status || 500;
-    return res.status(status).json({ error: 'Clean product fetch failed' });
+    res.status(status).json({ error: 'Amazon keyword search failed' });
   }
 });
 
 // eBay keyword/category search (CLEAN)
+// Clean eBay keyword/category search
 app.get('/search/ebay/clean', async (req, res) => {
   try {
-    const { q, ebay_domain = 'ebay.com' } = req.query;
+    if (!process.env.SEARCHAPI_KEY) return res.status(500).json({ error: 'SEARCHAPI_KEY missing' });
+
+    const { q, ebay_domain = 'ebay.com', page = '1' } = req.query;
     if (!q) return res.status(400).json({ error: 'Missing search query (q)' });
 
-    const params = new URLSearchParams({ engine: 'ebay', q, ebay_domain });
-    const r = await require('axios').get(
-      `https://www.searchapi.io/api/v1/search?${params}`,
-      { headers: { Authorization: `Bearer ${process.env.SEARCHAPI_KEY}` }, timeout: 30000 }
-    );
+    const params = new URLSearchParams({ engine: 'ebay', q, ebay_domain, page });
+    const r = await axios.get(`https://www.searchapi.io/api/v1/search?${params}`,
+      { headers: { Authorization: `Bearer ${process.env.SEARCHAPI_KEY}` }, timeout: 30000 });
 
     const items = r.data.organic_results || [];
     const data = items.map(i => ({
@@ -184,14 +184,23 @@ app.get('/search/ebay/clean', async (req, res) => {
       currency: i.price?.currency ?? null,
       seller: i.seller?.name ?? null,
       shipping: i.shipping?.price?.raw ?? null,
-      image: i.thumbnail ?? null,
+      image: i.thumbnail ?? null
     }));
-    res.json({ success: true, count: data.length, data });
+
+    res.json({
+      success: true,
+      query: q,
+      domain: ebay_domain,
+      page: Number(page),
+      count: data.length,
+      data
+    });
   } catch (err) {
     const status = err?.response?.status || 500;
     res.status(status).json({ error: 'Clean eBay search failed' });
   }
 });
+
 
 
 // ---------- Start server ----------
