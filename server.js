@@ -42,6 +42,38 @@ function requireKey(res) {
   return true;
 }
 
+
+function ebayBase() {
+  return process.env.EBAY_ENV === 'production'
+    ? 'https://api.ebay.com'
+    : 'https://api.sandbox.ebay.com';
+}
+
+async function getEbayToken() {
+  const tokenUrl = `${ebayBase()}/identity/v1/oauth2/token`;
+  const basic = Buffer.from(
+    `${process.env.EBAY_CLIENT_ID}:${process.env.EBAY_CLIENT_SECRET}`
+  ).toString('base64');
+
+  const resp = await axios.post(
+    tokenUrl,
+    new URLSearchParams({
+      grant_type: 'client_credentials',
+      scope: 'https://api.ebay.com/oauth/api_scope' // basic Buy scope
+    }),
+    {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Authorization: `Basic ${basic}`
+      },
+      timeout: 20000
+    }
+  );
+
+  return resp.data.access_token; // use this in Authorization: Bearer ...
+}
+
+
 // ---------- Google Shopping (SearchAPI.io) ----------
 // Example: /search/google-shopping?q=watches&location=United%20States
 app.get('/search/google-shopping', async (req, res) => {
@@ -162,42 +194,149 @@ app.get('/search/amazon/clean', async (req, res) => {
   }
 });
 
-// eBay keyword/category search (CLEAN)
-// Clean eBay keyword/category search
-app.get('/search/ebay/clean', async (req, res) => {
+// ===== eBay OAuth + Browse API (official) =====
+const EBAY_IDENTITY_URL = 'https://api.ebay.com/identity/v1/oauth2/token';
+const EBAY_BROWSE_BASE = 'https://api.ebay.com/buy/browse/v1';
+const EBAY_MARKETPLACE_ID = process.env.EBAY_MARKETPLACE_ID || 'EBAY_US';
+
+const ebayTokenCache = {
+  accessToken: null,
+  // epoch milliseconds
+  expiresAt: 0,
+};
+
+// Get or refresh an OAuth token (Client Credentials flow)
+async function getEbayAccessToken() {
+  const now = Date.now();
+  if (ebayTokenCache.accessToken && now < ebayTokenCache.expiresAt - 30_000) {
+    return ebayTokenCache.accessToken;
+  }
+
+  const basic = Buffer
+    .from(`${process.env.EBAY_CLIENT_ID}:${process.env.EBAY_CLIENT_SECRET}`)
+    .toString('base64');
+
+  const params = new URLSearchParams({
+    grant_type: 'client_credentials',
+    // General read-only scope is enough for Browse API
+    scope: 'https://api.ebay.com/oauth/api_scope',
+  });
+
+  const resp = await axios.post(EBAY_IDENTITY_URL, params.toString(), {
+    headers: {
+      Authorization: `Basic ${basic}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    timeout: 20000,
+  });
+
+  const { access_token, expires_in } = resp.data; // expires_in in seconds
+  ebayTokenCache.accessToken = access_token;
+  ebayTokenCache.expiresAt = Date.now() + (expires_in * 1000);
+  return access_token;
+}
+
+// Small helper to call eBay Browse API with auth + marketplace header
+async function ebayBrowseGET(path, query = {}) {
+  const token = await getEbayAccessToken();
+  const url = new URL(`${EBAY_BROWSE_BASE}${path}`);
+  Object.entries(query).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && `${v}` !== '') url.searchParams.set(k, v);
+  });
+
+  const resp = await axios.get(url.toString(), {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'X-EBAY-C-MARKETPLACE-ID': EBAY_MARKETPLACE_ID,
+    },
+    timeout: 30000,
+  });
+
+  return resp.data;
+}
+
+// ---------- /ebay/search  (keyword → results)
+// Example: /ebay/search?q=airpods%20pro&limit=10
+app.get('/ebay/search', async (req, res) => {
   try {
-    if (!process.env.SEARCHAPI_KEY) return res.status(500).json({ error: 'SEARCHAPI_KEY missing' });
+    if (!process.env.EBAY_CLIENT_ID || !process.env.EBAY_CLIENT_SECRET) {
+      return res.status(500).json({ error: 'Missing EBAY_CLIENT_ID/EBAY_CLIENT_SECRET in .env' });
+    }
+    const { q, limit = '10', offset = '0' } = req.query;
+    if (!q) return res.status(400).json({ error: 'Missing q' });
 
-    const { q, ebay_domain = 'ebay.com', page = '1' } = req.query;
-    if (!q) return res.status(400).json({ error: 'Missing search query (q)' });
+    // Browse API: item summary search
+    const data = await ebayBrowseGET('/item_summary/search', {
+      q,
+      limit,
+      offset,
+    });
 
-    const params = new URLSearchParams({ engine: 'ebay', q, ebay_domain, page });
-    const r = await axios.get(`https://www.searchapi.io/api/v1/search?${params}`,
-      { headers: { Authorization: `Bearer ${process.env.SEARCHAPI_KEY}` }, timeout: 30000 });
-
-    const items = r.data.organic_results || [];
-    const data = items.map(i => ({
-      item_id: i.item_id,
-      title: i.title,
-      link: i.link,
-      price: i.price?.value ?? null,
-      currency: i.price?.currency ?? null,
-      seller: i.seller?.name ?? null,
-      shipping: i.shipping?.price?.raw ?? null,
-      image: i.thumbnail ?? null
+    // Optional: clean fields for your frontend
+    const items = (data.itemSummaries || []).map(it => ({
+      item_id: it.itemId,                      // note: composite id like "v1|XXXXXXXX|0"
+      title: it.title,
+      price: it.price?.value ?? null,
+      currency: it.price?.currency ?? null,
+      condition: it.condition,
+      image: it.image?.imageUrl ?? null,
+      seller: it.seller?.username ?? null,
+      link: it.itemWebUrl,                    // public product URL
+      location: it.itemLocation?.country ?? null,
     }));
 
     res.json({
       success: true,
       query: q,
-      domain: ebay_domain,
-      page: Number(page),
-      count: data.length,
-      data
+      total: data.total || items.length,
+      count: items.length,
+      items,
+      raw: data, // remove if you don’t want to return raw
     });
   } catch (err) {
-    const status = err?.response?.status || 500;
-    res.status(status).json({ error: 'Clean eBay search failed' });
+    console.error('eBay search error:', err?.response?.status, err?.message);
+    res.status(err?.response?.status || 500).json({ error: 'eBay search failed' });
+  }
+});
+
+// ---------- /ebay/item  (item id → details)
+// Accepts either composite id "v1|1234567890|0" OR numeric "1234567890"
+app.get('/ebay/item', async (req, res) => {
+  try {
+    if (!process.env.EBAY_CLIENT_ID || !process.env.EBAY_CLIENT_SECRET) {
+      return res.status(500).json({ error: 'Missing EBAY_CLIENT_ID/EBAY_CLIENT_SECRET in .env' });
+    }
+    let { id } = req.query;
+    if (!id) return res.status(400).json({ error: 'Missing id' });
+
+    // If a plain numeric id is provided, convert to composite form
+    if (!id.includes('|')) {
+      id = `v1|${id}|0`;
+    }
+
+    const data = await ebayBrowseGET(`/item/${encodeURIComponent(id)}`);
+
+    // Optional: clean shape
+    const clean = {
+      item_id: data.itemId,
+      title: data.title,
+      price: data.price?.value ?? null,
+      currency: data.price?.currency ?? null,
+      condition: data.condition,
+      image: data.image?.imageUrl ?? null,
+      images: (data.additionalImages || []).map(i => i.imageUrl),
+      seller: data.seller?.username ?? null,
+      categories: (data.categoryPath || '').split('>').map(s => s.trim()).filter(Boolean),
+      link: data.itemWebUrl,
+      location: data.itemLocation?.country ?? null,
+      shipping_options: data.shippingOptions || [],
+      returns: data.returnTerms || null,
+    };
+
+    res.json({ success: true, data: clean, raw: data }); // drop "raw" if not needed
+  } catch (err) {
+    console.error('eBay item error:', err?.response?.status, err?.message);
+    res.status(err?.response?.status || 500).json({ error: 'eBay item fetch failed' });
   }
 });
 
